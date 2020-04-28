@@ -3,11 +3,101 @@ import numpy as np
 import scipy
 from scipy import stats
 from numba import jit
+from collections import Counter
+
+@jit(nopython=True) # this is the magic numba incantation that makes things go fast
+def equivalence_class_EM(nt, label_list, ind_list, prob_list, count_list):
+	num_reads = np.zeros(nt)
+	eta = np.ones(nt) / float(nt) # nt is number of transcripts, this is 1/M for everything
+	eta_p  = np.zeros(nt)          # this is where we will put the estimate of eta for the next iteration of the EM algorithm
+	converged = False
+
+	it = 0
+	ni = len(ind_list)-1
+
+	while not converged:
+		it += 1
+		for i in range(ni): # number of alignment blocks
+			denominator = 0.0
+			for j in range(ind_list[i], ind_list[i+1]):
+				P_1 = eta[label_list[j]]
+				numerator = P_1 * prob_list[j]
+				denominator += numerator
+
+			for j in range(ind_list[i], ind_list[i+1]):
+				P_1 = eta[label_list[j]]
+				numerator = P_1 * prob_list[j]
+				num_reads[label_list[j]] += count_list[i] * numerator / denominator
+				eta_p[label_list[j]] = num_reads[label_list[j]]/ni 
+
+		delta = np.sum(np.absolute(eta_p - eta))
+
+		if delta < 0.0001:
+			converged = True
+		else:
+			num_reads = np.zeros(nt)
+
+		print(it)
+		eta = eta_p
+		eta_p = np.zeros(nt)
+
+	return num_reads
 
 
-def equivalence_class_EM():
-	print("equivalence_class_EM")
+def calc_eqc_probabilities(ref_dict, outfile):
+	label_list = []
+	prob_list = []
+	ind_list = [0]
+	count_list = []
 
+	unique_reads = {}
+	keys = []
+	it = 0
+
+	# Read the alignment fragments and compute probabilities
+	while True:
+		it += 1
+		aln_line = f.readline()
+		if aln_line == "":
+			break
+		na = int(aln_line) # number of alignments in this alignment block
+		key_lst = []
+		for i in range(na):
+			toks = f.readline().strip().split("\t")
+			key_lst.append(toks[0])
+
+		key_lst.sort()
+		keys.append('-'.join(key_lst))
+
+	unique_reads = dict(Counter(keys))
+
+	for k in unique_reads.keys():
+		read_lst = k.split("-")
+
+		for fragment in read_lst:
+			tlen, tid, eff_len = ref_dict[fragment]
+
+			label_list.append(tid)
+			prob_list.append(1/eff_len)
+
+		ind_list.append(len(prob_list))
+		count_list.append(unique_reads[k])
+
+	label_lst = np.array(label_list)
+	ind_lst = np.array(ind_list)
+	prob_lst = np.array(prob_list)
+	count_lst = np.array(count_list)
+
+	print("\n\n\n\n\n=======================CALLING EQUIVALENCE CLASS EM=========================\n\n\n\n\n")
+	num_reads = equivalence_class_EM(transcript_len, label_lst, ind_lst, prob_lst, count_lst)
+	keys = list(ref_dict.keys())
+	effective_lens = list(ref_dict.values())
+	eff_lens = [v[2] for v in effective_lens]
+
+	with open(outfile, "w") as f1:
+		for i in range(len(num_reads)):
+			s = str(keys[i]) + "\t" + str(eff_lens[i]) + "\t" + str(num_reads[i]) + "\n"
+			f1.writelines(s)
 
 
 @jit(nopython=True) # this is the magic numba incantation that makes things go fast
@@ -35,7 +125,7 @@ def full_model_EM(nt, label_list, ind_list, prob_list):
 
 		delta = np.sum(np.absolute(eta_p - eta))
 
-		if delta < 0.001:
+		if delta < 0.0001:
 			converged = True
 		else:
 			num_reads = np.zeros(nt)
@@ -82,7 +172,8 @@ def calc_initial_probabilities(ref_dict, outfile):
     ind_lst = np.array(ind_list)
     prob_lst = np.array(prob_list)
 
-    print("\n\n\n\n\n=======================CALL FULL MODEL EM=========================\n\n\n\n\n")
+
+    print("\n\n\n\n\n=======================CALLING FULL MODEL EM=========================\n\n\n\n\n")
     num_reads = full_model_EM(transcript_len, label_lst, ind_lst, prob_lst)
 
     keys = list(ref_dict.keys())
@@ -201,8 +292,8 @@ if __name__ == '__main__':
 	    	# transcript name => (actual length, index, effective length)
 	    	ref_dict[toks[0]] = [toks[1], i, get_eff_len(int(toks[1]))]
 
-	    print("CALC INITIAL PROBS")
-	    calc_initial_probabilities(ref_dict, args.out)
+	    print("CALCULATING INITIAL PROBABILITIES")
 
-	    # equivalence_class_EM() if args.eqc else full_model_EM()
+	    calc_eqc_probabilities(ref_dict, args.out) if args.eqc else calc_initial_probabilities(ref_dict, args.out)
+
 
